@@ -1,12 +1,8 @@
 import { put, list, del } from '@vercel/blob';
 
 /**
- * Push subscription store using Vercel Blob.
- *
- * Each subscription is stored as a separate JSON blob at:
- *   push-subs/<endpointId>.json
- *
- * Vercel injects BLOB_READ_WRITE_TOKEN automatically when linked.
+ * Push subscription store using a single Vercel Blob file.
+ * All subscriptions live in one JSON blob: "push-subs.json"
  */
 
 // ── Types ──────────────────────────────────────────────
@@ -21,7 +17,7 @@ export interface StoredGoal {
 export interface SubscriptionEntry {
   subscription: PushSubscription;
   goals: StoredGoal[];
-  timezone: string; // e.g. "America/Bogota"
+  timezone: string;
   updatedAt: string;
 }
 
@@ -33,17 +29,38 @@ export interface PushSubscription {
   };
 }
 
+type Store = Record<string, SubscriptionEntry>;
+
 // ── Helpers ────────────────────────────────────────────
 
-const PREFIX = 'push-subs/';
+const BLOB_PATH = 'push-subs.json';
 
 function endpointId(endpoint: string): string {
-  // Last 32 chars of the push endpoint are unique per device
   return endpoint.slice(-32).replace(/[^a-zA-Z0-9]/g, '_');
 }
 
-function blobPath(endpoint: string): string {
-  return `${PREFIX}${endpointId(endpoint)}.json`;
+async function readStore(): Promise<Store> {
+  try {
+    const result = await list({ prefix: BLOB_PATH });
+    if (result.blobs.length === 0) return {};
+
+    const blob = result.blobs[0];
+    // Use downloadUrl which includes the token for private stores
+    const res = await fetch(blob.downloadUrl);
+    if (!res.ok) return {};
+    return await res.json();
+  } catch {
+    return {};
+  }
+}
+
+async function writeStore(store: Store): Promise<void> {
+  await put(BLOB_PATH, JSON.stringify(store), {
+    access: 'private',
+    addRandomSuffix: false,
+    allowOverwrite: true,
+    contentType: 'application/json',
+  });
 }
 
 // ── Store operations ───────────────────────────────────
@@ -53,50 +70,23 @@ export async function saveSubscription(
   goals: StoredGoal[],
   timezone: string = 'UTC'
 ) {
-  const entry: SubscriptionEntry = {
+  const store = await readStore();
+  store[endpointId(subscription.endpoint)] = {
     subscription,
     goals,
     timezone,
     updatedAt: new Date().toISOString(),
   };
-
-  await put(blobPath(subscription.endpoint), JSON.stringify(entry), {
-    access: 'public',
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    contentType: 'application/json',
-  });
+  await writeStore(store);
 }
 
 export async function removeSubscription(endpoint: string) {
-  try {
-    const blobs = await list({ prefix: blobPath(endpoint) });
-    for (const blob of blobs.blobs) {
-      await del(blob.url);
-    }
-  } catch {
-    // Already deleted or not found — no-op
-  }
+  const store = await readStore();
+  delete store[endpointId(endpoint)];
+  await writeStore(store);
 }
 
 export async function getAllSubscriptions(): Promise<SubscriptionEntry[]> {
-  const entries: SubscriptionEntry[] = [];
-  let cursor: string | undefined;
-
-  do {
-    const result = await list({ prefix: PREFIX, cursor });
-    for (const blob of result.blobs) {
-      try {
-        const res = await fetch(blob.url);
-        if (res.ok) {
-          entries.push(await res.json());
-        }
-      } catch {
-        // Skip corrupted blobs
-      }
-    }
-    cursor = result.hasMore ? result.cursor : undefined;
-  } while (cursor);
-
-  return entries;
+  const store = await readStore();
+  return Object.values(store);
 }

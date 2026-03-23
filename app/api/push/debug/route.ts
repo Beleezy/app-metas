@@ -20,8 +20,8 @@ export async function GET() {
 
   // 3. Blob connection works?
   try {
-    const result = await list({ prefix: 'push-subs/', limit: 1 });
-    checks.blobConnection = `OK (${result.blobs.length} blobs found in first page)`;
+    const result = await list({ prefix: 'push-subs', limit: 1 });
+    checks.blobConnection = `OK (${result.blobs.length} blobs found)`;
   } catch (err: unknown) {
     checks.blobConnection = `FAILED: ${(err as Error).message}`;
   }
