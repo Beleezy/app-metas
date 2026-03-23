@@ -87,35 +87,62 @@ function generateId(): string {
 // ============================================================
 function createAlarmSound() {
   let intervalId: ReturnType<typeof setInterval> | null = null;
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  let ctx: AudioContext | null = null;
+
+  function getContext(): AudioContext | null {
+    try {
+      if (!ctx || ctx.state === 'closed') {
+        ctx = new AudioContext();
+      }
+      if (ctx.state === 'suspended') {
+        ctx.resume();
+      }
+      return ctx;
+    } catch {
+      return null;
+    }
+  }
 
   function beep() {
+    // Don't play sound when page is hidden — avoids resource buildup that crashes the PWA
+    if (document.visibilityState === 'hidden') return;
+    const audioCtx = getContext();
+    if (!audioCtx) return;
     try {
-      const ctx = new AudioContext();
-      const g = ctx.createGain();
-      g.connect(ctx.destination);
-      g.gain.setValueAtTime(0.25, ctx.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.8);
+      const g = audioCtx.createGain();
+      g.connect(audioCtx.destination);
+      g.gain.setValueAtTime(0.25, audioCtx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.8);
 
-      const o1 = ctx.createOscillator();
+      const o1 = audioCtx.createOscillator();
       o1.type = 'sine';
-      o1.frequency.setValueAtTime(880, ctx.currentTime);
-      o1.frequency.setValueAtTime(660, ctx.currentTime + 0.2);
-      o1.frequency.setValueAtTime(880, ctx.currentTime + 0.4);
+      o1.frequency.setValueAtTime(880, audioCtx.currentTime);
+      o1.frequency.setValueAtTime(660, audioCtx.currentTime + 0.2);
+      o1.frequency.setValueAtTime(880, audioCtx.currentTime + 0.4);
       o1.connect(g);
-      o1.start(ctx.currentTime);
-      o1.stop(ctx.currentTime + 0.8);
+      o1.start(audioCtx.currentTime);
+      o1.stop(audioCtx.currentTime + 0.8);
     } catch {
       // Audio blocked – visual alarm still shows
     }
   }
 
+  function stopAll() {
+    if (intervalId) { clearInterval(intervalId); intervalId = null; }
+    if (timeoutId) { clearTimeout(timeoutId); timeoutId = null; }
+  }
+
   return {
     play() {
+      stopAll();
       beep();
       intervalId = setInterval(beep, 2500);
+      // Auto-stop after 60 seconds to prevent resource exhaustion if user doesn't dismiss
+      timeoutId = setTimeout(stopAll, 60_000);
     },
     stop() {
-      if (intervalId) { clearInterval(intervalId); intervalId = null; }
+      stopAll();
     },
   };
 }
@@ -158,6 +185,10 @@ export default function MetasDiarias() {
     } catch {
       setGoals(DEFAULT_GOALS);
     }
+    // Restore notification state from actual browser permission
+    if ('Notification' in window && Notification.permission === 'granted') {
+      setNotificationsOn(true);
+    }
     setMounted(true);
   }, []);
 
@@ -188,9 +219,23 @@ export default function MetasDiarias() {
     setCelebration(false);
   }, [completed, total]);
 
+  // ---- stop alarm when page goes to background ----
+  useEffect(() => {
+    function handleVisibility() {
+      if (document.visibilityState === 'hidden') {
+        alarmRef.current.stop();
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, []);
+
   // ---- alarm check ----
   useEffect(() => {
     if (!notificationsOn) return;
+    // Don't trigger alarms while the page is hidden
+    if (document.visibilityState === 'hidden') return;
+
     const todayDate = getDateForDayIndex(todayIdx);
     const todayComps = completions[todayDate] || {};
 
@@ -208,12 +253,23 @@ export default function MetasDiarias() {
       setAlarmGoal(goal);
       alarmRef.current.play();
 
+      // Send push notification (works even when app is in background)
       if (Notification.permission === 'granted') {
-        new Notification('Metas Diarias', {
-          body: `${goal.icon} ${goal.name} — ${formatTime12h(goal.time)}`,
-          icon: '/icon.svg',
-          tag: goal.id,
-        });
+        try {
+          navigator.serviceWorker?.ready.then((reg) => {
+            reg.showNotification('Metas Diarias', {
+              body: `${goal.icon} ${goal.name} — ${formatTime12h(goal.time)}`,
+              icon: '/icons/icon-192x192.png',
+              tag: goal.id,
+            } as NotificationOptions);
+          });
+        } catch {
+          new Notification('Metas Diarias', {
+            body: `${goal.icon} ${goal.name} — ${formatTime12h(goal.time)}`,
+            icon: '/icons/icon-192x192.png',
+            tag: goal.id,
+          });
+        }
       }
       break; // one alarm at a time
     }
