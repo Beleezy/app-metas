@@ -1,24 +1,22 @@
 import { list } from '@vercel/blob';
 import { getAllSubscriptions } from '@/lib/push-store';
+import { webpush } from '@/lib/web-push-config';
 
 /**
- * Diagnostic endpoint.
- * Visit: https://tu-app.vercel.app/api/push/debug
+ * GET  /api/push/debug         — diagnostic info
+ * POST /api/push/debug         — send a test push to all subscribers
  */
 export async function GET() {
   const checks: Record<string, unknown> = {};
 
-  // 1. VAPID keys configured?
   checks.vapid = {
     publicKey: !!process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY,
     privateKey: !!process.env.VAPID_PRIVATE_KEY,
     email: process.env.VAPID_EMAIL || '(not set)',
   };
 
-  // 2. Blob token present?
   checks.blobToken = !!process.env.BLOB_READ_WRITE_TOKEN;
 
-  // 3. Blob connection works?
   try {
     const result = await list({ prefix: 'push-subs', limit: 1 });
     checks.blobConnection = `OK (${result.blobs.length} blobs found)`;
@@ -26,13 +24,13 @@ export async function GET() {
     checks.blobConnection = `FAILED: ${(err as Error).message}`;
   }
 
-  // 4. Subscriptions stored?
   try {
     const subs = await getAllSubscriptions();
     checks.subscriptions = {
       count: subs.length,
       entries: subs.map((s) => ({
         endpoint: '...' + s.subscription.endpoint.slice(-30),
+        timezone: s.timezone || '(not set)',
         goals: s.goals.map((g) => `${g.icon} ${g.name} @ ${g.time}`),
         updatedAt: s.updatedAt,
       })),
@@ -41,10 +39,8 @@ export async function GET() {
     checks.subscriptions = `FAILED: ${(err as Error).message}`;
   }
 
-  // 5. Cron secret?
   checks.cronSecret = !!process.env.CRON_SECRET;
 
-  // 6. Server time (cron matches against this)
   const now = new Date();
   checks.serverTime = {
     utc: now.toISOString(),
@@ -55,4 +51,31 @@ export async function GET() {
   return Response.json(checks, {
     headers: { 'Cache-Control': 'no-store' },
   });
+}
+
+export async function POST() {
+  const subs = await getAllSubscriptions();
+  if (subs.length === 0) {
+    return Response.json({ error: 'No subscriptions found' }, { status: 404 });
+  }
+
+  const results: { endpoint: string; status: string }[] = [];
+
+  for (const entry of subs) {
+    const payload = JSON.stringify({
+      title: 'Metas Diarias — Test',
+      body: '🔔 Si ves esto, las push notifications funcionan!',
+      icon: '/icons/icon-192x192.png',
+      tag: 'test-push',
+    });
+
+    try {
+      await webpush.sendNotification(entry.subscription, payload);
+      results.push({ endpoint: '...' + entry.subscription.endpoint.slice(-20), status: 'OK' });
+    } catch (err: unknown) {
+      results.push({ endpoint: '...' + entry.subscription.endpoint.slice(-20), status: `FAILED: ${(err as Error).message}` });
+    }
+  }
+
+  return Response.json({ sent: results });
 }
