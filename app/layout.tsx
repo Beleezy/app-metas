@@ -41,7 +41,10 @@ export default function RootLayout({
     <html lang="es" className={`${outfit.variable} ${spaceMono.variable}`}>
       <head>
         <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-        <link rel="apple-touch-icon" href="/icon.svg" />
+        <link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-192x192.png" />
+        <link rel="icon" type="image/png" sizes="32x32" href="/icons/icon-96x96.png" />
+        <link rel="icon" type="image/png" sizes="16x16" href="/icons/icon-72x72.png" />
+        <meta name="mobile-web-app-capable" content="yes" />
       </head>
       <body className="min-h-dvh antialiased">{children}</body>
     </html>
