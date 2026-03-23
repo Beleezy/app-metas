@@ -1,12 +1,31 @@
-import { kv } from '@vercel/kv';
+import { Redis } from '@upstash/redis';
 
 /**
- * Push subscription store using Vercel KV (Redis).
+ * Push subscription store using Upstash Redis.
  *
- * Each subscription is stored as a hash entry under the key "push:subs".
- * The hash field is a short ID derived from the endpoint.
- * This ensures persistence across serverless invocations.
+ * Supports env vars from both Vercel Redis and Upstash directly:
+ *   - UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN  (Upstash default)
+ *   - KV_REST_API_URL / KV_REST_API_TOKEN                (Vercel KV)
+ *   - REDIS_REST_URL / REDIS_REST_TOKEN                   (Vercel Redis custom)
  */
+
+const url =
+  process.env.UPSTASH_REDIS_REST_URL ||
+  process.env.KV_REST_API_URL ||
+  process.env.REDIS_REST_URL ||
+  '';
+
+const token =
+  process.env.UPSTASH_REDIS_REST_TOKEN ||
+  process.env.KV_REST_API_TOKEN ||
+  process.env.REDIS_REST_TOKEN ||
+  '';
+
+const redis = new Redis({ url, token });
+
+export { redis };
+
+// ── Types ──────────────────────────────────────────────
 
 export interface StoredGoal {
   id: string;
@@ -29,11 +48,11 @@ export interface PushSubscription {
   };
 }
 
+// ── Store operations ───────────────────────────────────
+
 const HASH_KEY = 'push:subs';
 
-// Short stable ID from an endpoint URL
 function endpointId(endpoint: string): string {
-  // Use last 32 chars of endpoint as unique key (push service token part)
   return endpoint.slice(-32);
 }
 
@@ -46,15 +65,15 @@ export async function saveSubscription(
     goals,
     updatedAt: new Date().toISOString(),
   };
-  await kv.hset(HASH_KEY, { [endpointId(subscription.endpoint)]: JSON.stringify(entry) });
+  await redis.hset(HASH_KEY, { [endpointId(subscription.endpoint)]: JSON.stringify(entry) });
 }
 
 export async function removeSubscription(endpoint: string) {
-  await kv.hdel(HASH_KEY, endpointId(endpoint));
+  await redis.hdel(HASH_KEY, endpointId(endpoint));
 }
 
 export async function getAllSubscriptions(): Promise<SubscriptionEntry[]> {
-  const all = await kv.hgetall<Record<string, string>>(HASH_KEY);
+  const all = await redis.hgetall<Record<string, string>>(HASH_KEY);
   if (!all) return [];
   return Object.values(all).map((v) => {
     if (typeof v === 'string') return JSON.parse(v);
