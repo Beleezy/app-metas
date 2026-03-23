@@ -45,8 +45,12 @@ async function readStore(): Promise<Store> {
     if (result.blobs.length === 0) return {};
 
     const blob = result.blobs[0];
-    // Use downloadUrl which includes the token for private stores
-    const res = await fetch(blob.downloadUrl);
+    // Private blobs require the token header for server-side reads
+    const res = await fetch(blob.url, {
+      headers: {
+        Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}`,
+      },
+    });
     if (!res.ok) return {};
     return await res.json();
   } catch {
