@@ -17,8 +17,9 @@ export async function POST(request: Request) {
     await saveSubscription(subscription, goals || [], timezone || 'UTC');
 
     return Response.json({ success: true });
-  } catch {
-    return Response.json({ error: 'Failed to subscribe' }, { status: 500 });
+  } catch (err) {
+    console.error('Subscribe error:', err);
+    return Response.json({ error: 'Failed to subscribe', detail: String(err) }, { status: 500 });
   }
 }
 

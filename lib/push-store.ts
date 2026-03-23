@@ -63,6 +63,7 @@ export async function saveSubscription(
   await put(blobPath(subscription.endpoint), JSON.stringify(entry), {
     access: 'public',
     addRandomSuffix: false,
+    allowOverwrite: true,
     contentType: 'application/json',
   });
 }
