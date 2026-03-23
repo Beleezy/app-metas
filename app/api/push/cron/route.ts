@@ -18,16 +18,20 @@ async function handleCron(request: Request) {
   }
 
   const now = new Date();
-  const nowH = now.getHours().toString().padStart(2, '0');
-  const nowM = now.getMinutes().toString().padStart(2, '0');
-  const currentTime = `${nowH}:${nowM}`;
-
   const entries = await getAllSubscriptions();
   let sent = 0;
   let failed = 0;
 
   for (const entry of entries) {
-    const dueGoals = entry.goals.filter((g) => g.time === currentTime);
+    // Convert UTC to the user's local timezone to compare against goal times
+    const localTime = now.toLocaleTimeString('en-GB', {
+      timeZone: entry.timezone || 'UTC',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }); // "HH:MM"
+
+    const dueGoals = entry.goals.filter((g) => g.time === localTime);
     if (dueGoals.length === 0) continue;
 
     for (const goal of dueGoals) {
@@ -51,7 +55,7 @@ async function handleCron(request: Request) {
     }
   }
 
-  return Response.json({ time: currentTime, sent, failed });
+  return Response.json({ utc: now.toISOString(), sent, failed, checked: entries.length });
 }
 
 // Vercel Cron uses GET

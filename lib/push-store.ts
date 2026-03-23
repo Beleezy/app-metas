@@ -21,6 +21,7 @@ export interface StoredGoal {
 export interface SubscriptionEntry {
   subscription: PushSubscription;
   goals: StoredGoal[];
+  timezone: string; // e.g. "America/Bogota"
   updatedAt: string;
 }
 
@@ -49,11 +50,13 @@ function blobPath(endpoint: string): string {
 
 export async function saveSubscription(
   subscription: PushSubscription,
-  goals: StoredGoal[]
+  goals: StoredGoal[],
+  timezone: string = 'UTC'
 ) {
   const entry: SubscriptionEntry = {
     subscription,
     goals,
+    timezone,
     updatedAt: new Date().toISOString(),
   };
 

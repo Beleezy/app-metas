@@ -97,6 +97,7 @@ async function syncSubscription(goals: Goal[]) {
           time: g.time,
           icon: g.icon,
         })),
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       }),
     });
   } catch (err) {

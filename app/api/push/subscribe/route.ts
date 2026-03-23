@@ -4,16 +4,17 @@ import type { PushSubscription, StoredGoal } from '@/lib/push-store';
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { subscription, goals } = body as {
+    const { subscription, goals, timezone } = body as {
       subscription: PushSubscription;
       goals: StoredGoal[];
+      timezone?: string;
     };
 
     if (!subscription?.endpoint || !subscription?.keys?.p256dh || !subscription?.keys?.auth) {
       return Response.json({ error: 'Invalid subscription' }, { status: 400 });
     }
 
-    await saveSubscription(subscription, goals || []);
+    await saveSubscription(subscription, goals || [], timezone || 'UTC');
 
     return Response.json({ success: true });
   } catch {
