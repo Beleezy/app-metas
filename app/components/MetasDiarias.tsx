@@ -45,6 +45,82 @@ const DEFAULT_GOALS: Goal[] = [
 const LS_GOALS = 'metas-diarias-goals';
 const LS_COMPLETIONS = 'metas-diarias-completions';
 
+const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '';
+
+// ============================================================
+// PUSH SUBSCRIPTION HELPERS
+// ============================================================
+function urlBase64ToUint8Array(base64String: string): Uint8Array {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+
+async function subscribeToPush(): Promise<PushSubscription | null> {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY).buffer as ArrayBuffer,
+      });
+    }
+    return sub;
+  } catch (err) {
+    console.error('Push subscription failed:', err);
+    return null;
+  }
+}
+
+async function syncSubscription(goals: Goal[]) {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (!sub) return;
+
+    const serialized = sub.toJSON();
+    await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        subscription: {
+          endpoint: sub.endpoint,
+          keys: serialized.keys,
+        },
+        goals: goals.map((g) => ({
+          id: g.id,
+          name: g.name,
+          time: g.time,
+          icon: g.icon,
+        })),
+      }),
+    });
+  } catch (err) {
+    console.error('Sync subscription failed:', err);
+  }
+}
+
+async function unsubscribeFromPush() {
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      await fetch('/api/push/subscribe', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ endpoint: sub.endpoint }),
+      });
+      await sub.unsubscribe();
+    }
+  } catch (err) {
+    console.error('Unsubscribe failed:', err);
+  }
+}
+
 // ============================================================
 // HELPERS
 // ============================================================
@@ -185,18 +261,26 @@ export default function MetasDiarias() {
     } catch {
       setGoals(DEFAULT_GOALS);
     }
-    // Restore notification state from actual browser permission
-    if ('Notification' in window && Notification.permission === 'granted') {
-      setNotificationsOn(true);
+    // Restore notification state from push subscription (not just permission)
+    if ('Notification' in window && Notification.permission === 'granted' && 'serviceWorker' in navigator) {
+      navigator.serviceWorker.ready.then((reg) => {
+        reg.pushManager.getSubscription().then((sub) => {
+          setNotificationsOn(!!sub);
+        });
+      });
     }
     setMounted(true);
   }, []);
 
-  // ---- localStorage save ----
+  // ---- localStorage save + sync goals to push server ----
   useEffect(() => {
     if (!mounted) return;
     localStorage.setItem(LS_GOALS, JSON.stringify(goals));
-  }, [goals, mounted]);
+    // Keep server-side goals in sync for push notifications
+    if (notificationsOn) {
+      syncSubscription(goals);
+    }
+  }, [goals, mounted, notificationsOn]);
 
   useEffect(() => {
     if (!mounted) return;
@@ -293,9 +377,24 @@ export default function MetasDiarias() {
 
   const enableNotifications = useCallback(async () => {
     if (!('Notification' in window)) { alert('Tu navegador no soporta notificaciones'); return; }
+
+    if (notificationsOn) {
+      // Toggle off: unsubscribe
+      await unsubscribeFromPush();
+      setNotificationsOn(false);
+      return;
+    }
+
     const perm = await Notification.requestPermission();
-    setNotificationsOn(perm === 'granted');
-  }, []);
+    if (perm !== 'granted') { setNotificationsOn(false); return; }
+
+    // Subscribe to push and sync goals to server
+    const sub = await subscribeToPush();
+    if (sub) {
+      setNotificationsOn(true);
+      await syncSubscription(goals);
+    }
+  }, [notificationsOn, goals]);
 
   const dismissAlarm = useCallback((markDone: boolean) => {
     alarmRef.current.stop();

@@ -22,6 +22,35 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+// ---- Push Notifications (background) ----
+self.addEventListener('push', (event) => {
+  if (!event.data) return;
+
+  let data;
+  try {
+    data = event.data.json();
+  } catch {
+    data = { title: 'Metas Diarias', body: event.data.text() };
+  }
+
+  const { title = 'Metas Diarias', body = '', icon = '/icons/icon-192x192.png', tag = 'default' } = data;
+
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body,
+      icon,
+      badge: '/icons/icon-96x96.png',
+      tag,
+      vibrate: [200, 100, 200, 100, 200],
+      data: { url: '/' },
+      actions: [
+        { action: 'done', title: '✓ Completado' },
+        { action: 'snooze', title: 'Después' },
+      ],
+    })
+  );
+});
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   event.waitUntil(
