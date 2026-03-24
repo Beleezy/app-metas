@@ -37,30 +37,40 @@ export async function saveSubscription(
 ) {
   const db = getServiceSupabase();
 
-  await db.from('push_subscriptions').upsert(
+  const { error } = await db.from('push_subscriptions').upsert(
     {
       endpoint: subscription.endpoint,
       p256dh: subscription.keys.p256dh,
       auth: subscription.keys.auth,
-      goals: JSON.stringify(goals),
+      goals,  // jsonb column — pass array directly, no JSON.stringify
       timezone,
       device_id: deviceId || null,
       updated_at: new Date().toISOString(),
     },
     { onConflict: 'endpoint' }
   );
+
+  if (error) {
+    console.error('saveSubscription error:', error);
+    throw error;
+  }
 }
 
 export async function removeSubscription(endpoint: string) {
   const db = getServiceSupabase();
-  await db.from('push_subscriptions').delete().eq('endpoint', endpoint);
+  const { error } = await db.from('push_subscriptions').delete().eq('endpoint', endpoint);
+  if (error) console.error('removeSubscription error:', error);
 }
 
 export async function getAllSubscriptions(): Promise<SubscriptionEntry[]> {
   const db = getServiceSupabase();
   const { data, error } = await db.from('push_subscriptions').select('*');
 
-  if (error || !data) return [];
+  if (error) {
+    console.error('getAllSubscriptions error:', error);
+    return [];
+  }
+  if (!data) return [];
 
   return data.map((row) => ({
     subscription: {
@@ -70,7 +80,7 @@ export async function getAllSubscriptions(): Promise<SubscriptionEntry[]> {
         auth: row.auth,
       },
     },
-    goals: typeof row.goals === 'string' ? JSON.parse(row.goals) : row.goals,
+    goals: Array.isArray(row.goals) ? row.goals : [],
     timezone: row.timezone,
     updatedAt: row.updated_at,
   }));

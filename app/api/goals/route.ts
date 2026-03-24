@@ -42,7 +42,11 @@ export async function POST(request: Request) {
     const db = getServiceSupabase();
 
     // Delete existing goals for this device, then insert fresh set
-    await db.from('goals').delete().eq('device_id', device_id);
+    const { error: delError } = await db.from('goals').delete().eq('device_id', device_id);
+    if (delError) {
+      console.error('Delete goals error:', delError);
+      return Response.json({ error: delError.message }, { status: 500 });
+    }
 
     if (goals.length > 0) {
       const rows = goals.map((g) => ({
