@@ -48,6 +48,19 @@ const LS_COMPLETIONS = 'metas-diarias-completions';
 const VAPID_PUBLIC_KEY = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '';
 
 // ============================================================
+// DEVICE ID (identifica este navegador de forma anónima)
+// ============================================================
+function getDeviceId(): string {
+  const LS_DEVICE_ID = 'metas-diarias-device-id';
+  let id = localStorage.getItem(LS_DEVICE_ID);
+  if (!id) {
+    id = crypto.randomUUID();
+    localStorage.setItem(LS_DEVICE_ID, id);
+  }
+  return id;
+}
+
+// ============================================================
 // PUSH SUBSCRIPTION HELPERS
 // ============================================================
 function urlBase64ToUint8Array(base64String: string): Uint8Array {
@@ -83,7 +96,7 @@ async function syncSubscription(goals: Goal[]) {
     if (!sub) return;
 
     const serialized = sub.toJSON();
-    await fetch('/api/push/subscribe', {
+    await fetch('/api/subscribe', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -98,6 +111,7 @@ async function syncSubscription(goals: Goal[]) {
           icon: g.icon,
         })),
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        device_id: getDeviceId(),
       }),
     });
   } catch (err) {
@@ -110,7 +124,7 @@ async function unsubscribeFromPush() {
     const reg = await navigator.serviceWorker.ready;
     const sub = await reg.pushManager.getSubscription();
     if (sub) {
-      await fetch('/api/push/subscribe', {
+      await fetch('/api/subscribe', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ endpoint: sub.endpoint }),
@@ -119,6 +133,38 @@ async function unsubscribeFromPush() {
     }
   } catch (err) {
     console.error('Unsubscribe failed:', err);
+  }
+}
+
+// ============================================================
+// SERVER SYNC HELPERS
+// ============================================================
+async function syncGoalsToServer(goals: Goal[]) {
+  try {
+    await fetch('/api/goals', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ device_id: getDeviceId(), goals }),
+    });
+  } catch (err) {
+    console.error('Sync goals failed:', err);
+  }
+}
+
+async function syncCompletionToServer(goalId: string, date: string, completed: boolean) {
+  try {
+    await fetch('/api/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        device_id: getDeviceId(),
+        goal_id: goalId,
+        date,
+        completed,
+      }),
+    });
+  } catch (err) {
+    console.error('Sync completion failed:', err);
   }
 }
 
@@ -273,11 +319,13 @@ export default function MetasDiarias() {
     setMounted(true);
   }, []);
 
-  // ---- localStorage save + sync goals to push server ----
+  // ---- localStorage save + sync goals to server ----
   useEffect(() => {
     if (!mounted) return;
     localStorage.setItem(LS_GOALS, JSON.stringify(goals));
-    // Keep server-side goals in sync for push notifications
+    // Sync goals to Supabase
+    syncGoalsToServer(goals);
+    // Keep push subscription in sync
     if (notificationsOn) {
       syncSubscription(goals);
     }
@@ -371,7 +419,10 @@ export default function MetasDiarias() {
   const toggleCompletion = useCallback((goalId: string) => {
     setCompletions((prev) => {
       const day = { ...prev[dateKey] };
-      day[goalId] = !day[goalId];
+      const newValue = !day[goalId];
+      day[goalId] = newValue;
+      // Sync to server in background
+      syncCompletionToServer(goalId, dateKey, newValue);
       return { ...prev, [dateKey]: day };
     });
   }, [dateKey]);

@@ -2,15 +2,15 @@ import { webpush } from '@/lib/web-push-config';
 import { getAllSubscriptions, removeSubscription } from '@/lib/push-store';
 
 /**
- * Cron endpoint: checks all subscriptions and sends push notifications
- * for goals whose time matches the current HH:MM.
+ * Cron endpoint: revisa todas las suscripciones y envía push notifications
+ * para metas cuyo horario coincida con el HH:MM actual del usuario.
  *
- * Vercel Cron sends GET requests automatically every minute (vercel.json).
- * Can also be called manually via POST.
+ * Protegido con header Authorization: Bearer <CRON_SECRET>.
+ * Vercel Cron envía GET automáticamente cada minuto (vercel.json).
  */
 
 async function handleCron(request: Request) {
-  // Protect with CRON_SECRET (Vercel injects this header automatically)
+  // Verificar autorización
   const authHeader = request.headers.get('authorization');
   const cronSecret = process.env.CRON_SECRET;
   if (cronSecret && authHeader !== `Bearer ${cronSecret}`) {
@@ -21,17 +21,26 @@ async function handleCron(request: Request) {
   const entries = await getAllSubscriptions();
   let sent = 0;
   let failed = 0;
+  const debug: { timezone: string; localTime: string; goalsChecked: number; due: string[] }[] = [];
 
   for (const entry of entries) {
-    // Convert UTC to the user's local timezone to compare against goal times
+    // Convertir UTC al timezone local del usuario
+    const tz = entry.timezone || 'UTC';
     const localTime = now.toLocaleTimeString('en-GB', {
-      timeZone: entry.timezone || 'UTC',
+      timeZone: tz,
       hour: '2-digit',
       minute: '2-digit',
       hour12: false,
     }); // "HH:MM"
 
     const dueGoals = entry.goals.filter((g) => g.time === localTime);
+    debug.push({
+      timezone: tz,
+      localTime,
+      goalsChecked: entry.goals.length,
+      due: dueGoals.map((g) => `${g.icon} ${g.name} @ ${g.time}`),
+    });
+
     if (dueGoals.length === 0) continue;
 
     for (const goal of dueGoals) {
@@ -48,6 +57,7 @@ async function handleCron(request: Request) {
       } catch (err: unknown) {
         const statusCode = (err as { statusCode?: number }).statusCode;
         if (statusCode === 410 || statusCode === 404) {
+          // Suscripción expirada — eliminar
           await removeSubscription(entry.subscription.endpoint);
         }
         failed++;
@@ -55,15 +65,15 @@ async function handleCron(request: Request) {
     }
   }
 
-  return Response.json({ utc: now.toISOString(), sent, failed, checked: entries.length });
+  return Response.json({ utc: now.toISOString(), sent, failed, checked: entries.length, debug });
 }
 
-// Vercel Cron uses GET
+// Vercel Cron usa GET
 export async function GET(request: Request) {
   return handleCron(request);
 }
 
-// Manual trigger uses POST
+// Trigger manual usa POST
 export async function POST(request: Request) {
   return handleCron(request);
 }

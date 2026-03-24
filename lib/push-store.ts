@@ -1,12 +1,10 @@
-import { put, list, del } from '@vercel/blob';
+import { getServiceSupabase } from './supabase';
 
 /**
- * Push subscription store using a single Vercel Blob file.
- * All subscriptions live in one JSON blob: "push-subs.json"
+ * Push subscription store backed by Supabase.
  */
 
 // ── Types ──────────────────────────────────────────────
-
 export interface StoredGoal {
   id: string;
   name: string;
@@ -29,68 +27,51 @@ export interface PushSubscription {
   };
 }
 
-type Store = Record<string, SubscriptionEntry>;
-
-// ── Helpers ────────────────────────────────────────────
-
-const BLOB_PATH = 'push-subs.json';
-
-function endpointId(endpoint: string): string {
-  return endpoint.slice(-32).replace(/[^a-zA-Z0-9]/g, '_');
-}
-
-async function readStore(): Promise<Store> {
-  try {
-    const result = await list({ prefix: BLOB_PATH });
-    if (result.blobs.length === 0) return {};
-
-    const blob = result.blobs[0];
-    // Private blobs require the token header for server-side reads
-    const res = await fetch(blob.url, {
-      headers: {
-        Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}`,
-      },
-    });
-    if (!res.ok) return {};
-    return await res.json();
-  } catch {
-    return {};
-  }
-}
-
-async function writeStore(store: Store): Promise<void> {
-  await put(BLOB_PATH, JSON.stringify(store), {
-    access: 'private',
-    addRandomSuffix: false,
-    allowOverwrite: true,
-    contentType: 'application/json',
-  });
-}
-
 // ── Store operations ───────────────────────────────────
 
 export async function saveSubscription(
   subscription: PushSubscription,
   goals: StoredGoal[],
-  timezone: string = 'UTC'
+  timezone: string = 'UTC',
+  deviceId?: string
 ) {
-  const store = await readStore();
-  store[endpointId(subscription.endpoint)] = {
-    subscription,
-    goals,
-    timezone,
-    updatedAt: new Date().toISOString(),
-  };
-  await writeStore(store);
+  const db = getServiceSupabase();
+
+  await db.from('push_subscriptions').upsert(
+    {
+      endpoint: subscription.endpoint,
+      p256dh: subscription.keys.p256dh,
+      auth: subscription.keys.auth,
+      goals: JSON.stringify(goals),
+      timezone,
+      device_id: deviceId || null,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: 'endpoint' }
+  );
 }
 
 export async function removeSubscription(endpoint: string) {
-  const store = await readStore();
-  delete store[endpointId(endpoint)];
-  await writeStore(store);
+  const db = getServiceSupabase();
+  await db.from('push_subscriptions').delete().eq('endpoint', endpoint);
 }
 
 export async function getAllSubscriptions(): Promise<SubscriptionEntry[]> {
-  const store = await readStore();
-  return Object.values(store);
+  const db = getServiceSupabase();
+  const { data, error } = await db.from('push_subscriptions').select('*');
+
+  if (error || !data) return [];
+
+  return data.map((row) => ({
+    subscription: {
+      endpoint: row.endpoint,
+      keys: {
+        p256dh: row.p256dh,
+        auth: row.auth,
+      },
+    },
+    goals: typeof row.goals === 'string' ? JSON.parse(row.goals) : row.goals,
+    timezone: row.timezone,
+    updatedAt: row.updated_at,
+  }));
 }
